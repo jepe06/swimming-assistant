@@ -217,10 +217,8 @@ function loadState() {
   }
 }
 
-function saveState(successMessage = '') {
-  try {
-    ensurePlanIdentity();
-    localStorage.setItem(STORE_KEY, JSON.stringify({
+function persistedState() {
+  return {
       athletes: S.athletes,
       results: S.results,
       zoneLog: S.zoneLog,
@@ -233,7 +231,13 @@ function saveState(successMessage = '') {
       activeAthleteId: S.activeAthleteId,
       liveSplitDistance: S.liveSplitDistance,
       activeSession: safeSessionForSave(S.activeSession),
-    }));
+  };
+}
+
+function saveState(successMessage = '') {
+  try {
+    ensurePlanIdentity();
+    localStorage.setItem(STORE_KEY, JSON.stringify(persistedState()));
     hasUnsavedChanges = false;
     if ($('saveWarning')) $('saveWarning').hidden = true;
     if (successMessage) toast(successMessage);
@@ -759,6 +763,8 @@ function showPlanManager() {
     ${activeWarning}`,
     [
       { label: 'Carregar/substituir plano', cls: 'btn-primary', fn: triggerPlanImport },
+      { label: 'Descarregar cópia de segurança', cls: 'btn-secondary', fn: exportBackup },
+      { label: 'Restaurar cópia de segurança', cls: 'btn-secondary', fn: triggerBackupRestore },
       { label: 'Limpar plano atual', cls: 'btn-secondary', fn: showClearPlanConfirm },
       { label: 'Apagar todos os dados', cls: 'btn-danger', fn: showClearAllConfirm },
       { label: 'Cancelar', cls: 'btn-secondary', fn: closeModal },
@@ -838,6 +844,86 @@ function clearAllData() {
   closeModal();
   syncSessionButtons();
   renderTab();
+}
+
+// ============================================================
+// FULL BACKUP / RESTORE
+// ============================================================
+function backupJSON() {
+  ensurePlanIdentity();
+  const data = JSON.parse(JSON.stringify(persistedState()));
+  if (data.activeSession) {
+    data.activeSession.elapsed = getLiveElapsed(S.activeSession);
+    data.activeSession.running = false;
+    data.activeSession.start = 0;
+  }
+  return SwimCoachBackup.stringify(data);
+}
+
+function downloadText(text, filename, mime) {
+  const url = URL.createObjectURL(new Blob([text], { type: mime }));
+  const link = Object.assign(document.createElement('a'), { href: url, download: filename });
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function exportBackup() {
+  try {
+    downloadText(backupJSON(), `swimcoach_${new Date().toISOString().slice(0, 10)}.json`, 'application/json');
+    toast('Cópia descarregada. Sessões em curso serão restauradas em pausa.');
+  } catch (err) { toast(`Não foi possível criar a cópia: ${err.message}`); }
+}
+
+function triggerBackupRestore() {
+  if (hasBlockingActiveSession()) { toast('Termine ou descarte a sessão ativa antes de restaurar.'); return; }
+  const input = document.createElement('input');
+  input.type = 'file'; input.accept = '.json';
+  input.addEventListener('change', async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    try {
+      if (file.size > SwimCoachBackup.MAX_BYTES) throw new Error('A cópia excede 10 MB.');
+      showBackupRestore(await file.text());
+    } catch (err) { toast(err.message); }
+  });
+  input.click();
+}
+
+function showBackupRestore(serialized) {
+  const data = SwimCoachBackup.parse(serialized);
+  showModal('Restaurar cópia de segurança',
+    `<div class="info-bar">Esta cópia contém ${data.athletes.length} atletas, ${data.results.length} resultados e ${Object.keys(data.weekPlan).length} dias de plano.${data.activeSession ? ' A sessão Live será restaurada em pausa.' : ''}</div>
+    <p>Substitui todos os dados atuais neste dispositivo. Descarregue primeiro uma cópia dos dados atuais.</p>
+    <button class="btn btn-secondary" onclick="exportBackup()">Descarregar dados atuais</button>
+    <label><span class="form-label">Escreva RESTAURAR para confirmar</span><input class="inp" id="restoreConfirm" autocomplete="off"></label>
+    <div id="restoreError" role="alert"></div>`,
+    [
+      { label: 'Substituir e restaurar', cls: 'btn-danger', fn: () => restoreBackup(serialized) },
+      { label: 'Cancelar', cls: 'btn-secondary', fn: closeModal },
+    ]);
+}
+
+function restoreBackup(serialized) {
+  try {
+    if ($('restoreConfirm')?.value.trim() !== 'RESTAURAR') throw new Error('Escreva RESTAURAR para confirmar.');
+    if (hasBlockingActiveSession()) throw new Error('Termine ou descarte a sessão ativa antes de restaurar.');
+    const data = SwimCoachBackup.parse(serialized);
+    // One atomic storage write before touching the current in-memory state.
+    localStorage.setItem(STORE_KEY, JSON.stringify(data));
+    if (S.activeSession?.iv) clearInterval(S.activeSession.iv);
+    releaseWakeLock();
+    S = { ...defaultState(), ...data };
+    hasUnsavedChanges = false;
+    if ($('saveWarning')) $('saveWarning').hidden = true;
+    closeModal(); syncSessionButtons(); renderTab();
+    toast('Cópia restaurada. Sessões Live retomam apenas ao tocar em Retomar.');
+    return true;
+  } catch (err) {
+    const message = `Não foi possível restaurar: ${err.message}`;
+    if ($('restoreError')) $('restoreError').textContent = message;
+    toast(message);
+    return false;
+  }
 }
 
 // ============================================================

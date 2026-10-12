@@ -28,9 +28,9 @@
 
     <div id="saveWarning" class="save-warning" role="alert" hidden>
       <strong>Alterações não guardadas neste dispositivo.</strong>
-      Mantenha esta página aberta. Tente guardar novamente ou exporte os resultados em CSV.
+      Mantenha esta página aberta. Tente guardar novamente ou descarregue uma cópia de segurança.
       <button class="btn btn-secondary btn-sm" onclick="saveState('Alterações guardadas.')">Tentar guardar</button>
-      <button class="btn btn-secondary btn-sm" onclick="exportCSV()">Exportar CSV</button>
+      <button class="btn btn-secondary btn-sm" onclick="exportBackup()">Descarregar cópia</button>
     </div>
     <main id="content"></main>
 
@@ -73,6 +73,7 @@
   <div id="toast"></div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="backup.js" defer></script>
   <script src="app.js" defer></script>
 
   <!-- Vercel Web Analytics: static HTML/PWA integration.
