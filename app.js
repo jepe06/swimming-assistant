@@ -2167,12 +2167,20 @@ function confirmDeleteResult(id) {
   renderTab();
 }
 
-function exportCSV() {
-  if (!S.results.length) { toast('Sem resultados para exportar.'); return; }
+function serializeCSV(rows) {
+  return rows.map((row) => row.map((value) => {
+    let text = String(value ?? '');
+    // Quoting alone does not stop spreadsheets from evaluating formula text.
+    if (/^[\s\u0000-\u001f]*[=+@-]|^[\t\r\n]/.test(text)) text = "'" + text;
+    return '"' + text.replace(/"/g, '""') + '"';
+  }).join(',')).join('\r\n');
+}
+
+function resultsCSV(results) {
   const rows = [[
-    'SessionID', 'Data', 'Dia', 'Sessão', 'Atleta', 'Bloco', 'Exercício', 'Zona', 'Metros', 'Piscina', 'SplitDistance', 'AlvoTotal', 'Estrutura', 'Parcial', 'Repetição', 'DistânciaParcial', 'DistânciaTotal', 'Acumulado', 'Volta', 'AlvoAcumulado', 'DeltaAlvoAcumulado', 'Corrigido', 'OriginalAcumulado'
+    'SessionID', 'Data', 'Dia', 'Sessão', 'Atleta', 'Bloco', 'Exercício', 'Zona', 'Metros', 'Piscina', 'SplitDistance', 'AlvoTotal', 'Estrutura', 'Parcial', 'Repetição', 'DistânciaParcial', 'DistânciaTotal', 'Acumulado', 'Volta', 'AlvoAcumulado', 'DeltaAlvoAcumulado', 'Corrigido', 'OriginalAcumulado', 'CorrigidoEm'
   ]];
-  S.results.forEach((r) => r.splits.forEach((s, i) => rows.push([
+  results.forEach((r) => r.splits.forEach((s, i) => rows.push([
     r.sessionId || '',
     r.date,
     r.dia,
@@ -2196,8 +2204,14 @@ function exportCSV() {
     s.targetDiffMs === null || s.targetDiffMs === undefined ? '' : `${s.targetDiffMs >= 0 ? '+' : '-'}${fmtTime(Math.abs(s.targetDiffMs))}`,
     s.corrected ? 'sim' : '',
     s.originalCum === undefined ? '' : fmtTime(s.originalCum),
+    s.correctedAt || '',
   ])));
-  const csv = rows.map((r) => r.map((v) => JSON.stringify(String(v))).join(',')).join('\n');
+  return serializeCSV(rows);
+}
+
+function exportCSV() {
+  if (!S.results.length) { toast('Sem resultados para exportar.'); return; }
+  const csv = resultsCSV(S.results);
   const url = URL.createObjectURL(new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' }));
   const a = Object.assign(document.createElement('a'), {
     href: url,
