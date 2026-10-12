@@ -37,6 +37,9 @@ const DAY_MAP = {
   DOMINGO: 6,
 };
 
+const MAX_IMPORT_BYTES = 10 * 1024 * 1024;
+const MAX_PLAN_ROWS = 10000;
+
 const HEADER_NAMES = ['AQUECIMENTO', 'TAREFA', 'RECUPERACAO', 'FOLGA'];
 
 let S = defaultState();
@@ -844,14 +847,16 @@ function loadXlsx(e) {
   const file = e.target.files?.[0];
   if (!file) return;
 
+  if (!/\.(xlsx|xls)$/i.test(file.name) || file.size > MAX_IMPORT_BYTES) {
+    toast('Escolha um ficheiro XLSX ou XLS até 10 MB.');
+    e.target.value = '';
+    return;
+  }
   const reader = new FileReader();
+  reader.onerror = () => toast('Não foi possível ler o ficheiro. O plano atual foi mantido.');
   reader.onload = (ev) => {
     try {
-      if (!window.XLSX) throw new Error('Biblioteca XLSX não carregada. Verifique a ligação à internet no primeiro carregamento.');
-      const wb = XLSX.read(new Uint8Array(ev.target.result), { type: 'array' });
-      const ws = wb.Sheets[wb.SheetNames[0]];
-      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: true });
-      const parsed = parseWeekRows(rows);
+      const parsed = readPlanWorkbook(new Uint8Array(ev.target.result));
       parsed.filename = file.name;
       showLoadModal(parsed, file.name);
     } catch (err) {
@@ -863,27 +868,82 @@ function loadXlsx(e) {
   e.target.value = '';
 }
 
+function readPlanWorkbook(bytes) {
+  if (!window.XLSX) throw new Error('Biblioteca XLSX indisponível. Recarregue a aplicação.');
+  if (bytes.byteLength > MAX_IMPORT_BYTES) throw new Error('O ficheiro excede 10 MB.');
+  const wb = XLSX.read(bytes, { type: 'array', sheets: 0, sheetRows: MAX_PLAN_ROWS + 1 });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  if (!ws || !ws['!ref']) throw new Error('A primeira folha está vazia.');
+  const range = XLSX.utils.decode_range(ws['!fullref'] || ws['!ref']);
+  if (range.e.r >= MAX_PLAN_ROWS || range.e.c > 255) throw new Error('A folha excede 10000 linhas ou 256 colunas.');
+  // Fixed columns keep unexpectedly wide sparse sheets from allocating huge arrays.
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: true,
+    range: { s: { r: 0, c: 0 }, e: { r: range.e.r, c: COL.T_metros } } });
+  const parsed = parseWeekRows(rows);
+  validateImportedPlan(parsed.plan);
+  return parsed;
+}
+
+function plannedZoneTotals(plan) {
+  const totals = {};
+  Object.entries(plan).forEach(([day, sessions]) => {
+    ['manha', 'tarde'].forEach((sess) => {
+      const key = `${day}_${sess}`;
+      totals[key] = zoneTotals();
+      (sessions[sess] || []).forEach((row) => {
+        if (!row.isHeader && ZONAS.includes(row.zona)) totals[key][row.zona] += parseMeters(row.metros);
+      });
+    });
+  });
+  return totals;
+}
+
+function validateImportedPlan(plan) {
+  if (!plan || typeof plan !== 'object' || Array.isArray(plan)) throw new Error('Plano inválido.');
+  let usableRows = 0;
+  for (const [day, sessions] of Object.entries(plan)) {
+    if (!/^[0-6]$/.test(day) || !sessions || typeof sessions !== 'object') throw new Error('Dia inválido no plano.');
+    for (const sess of ['manha', 'tarde']) {
+      if (!Array.isArray(sessions[sess])) throw new Error('Sessão inválida no plano.');
+      for (const row of sessions[sess]) {
+        if (!row || typeof row !== 'object' || typeof row.isHeader !== 'boolean' ||
+            (row.metros !== undefined && (!Number.isFinite(row.metros) || row.metros < 0)) ||
+            (row.zona && !ZONAS.includes(row.zona))) throw new Error('Exercício inválido no plano.');
+        if (row.tipo === 'folga' || (!row.isHeader && (String(row.desc || '').trim() || row.metros > 0))) usableRows++;
+      }
+    }
+  }
+  if (!usableRows) throw new Error('Não foram encontrados exercícios ou dias de folga. O plano atual foi mantido.');
+}
+
 function parseWeekRows(rows) {
   const plan = {};
-  const zonePl = {};
+  const warnings = [];
   let curDay = null;
 
-  rows.forEach((row) => {
+  if (!Array.isArray(rows) || rows.length > MAX_PLAN_ROWS) throw new Error('Folha inválida ou demasiado grande.');
+  rows.forEach((row, rowIndex) => {
+    if (!Array.isArray(row)) throw new Error(`Linha ${rowIndex + 1} inválida.`);
     const c0 = norm(row[COL.day]);
-    if (DAY_MAP[c0] !== undefined) {
+    if (Object.hasOwn(DAY_MAP, c0)) {
       curDay = DAY_MAP[c0];
-      plan[curDay] = { manha: [], tarde: [], piscina: String(row[COL.pool] || '').trim() };
+      const pool = String(row[COL.pool] || '').trim().toUpperCase();
+      if (plan[curDay]) {
+        if (pool && plan[curDay].piscina && pool !== plan[curDay].piscina) throw new Error(`Piscinas diferentes para ${DIAS[curDay]} na linha ${rowIndex + 1}.`);
+        plan[curDay].piscina ||= pool;
+        warnings.push(`${DIAS[curDay]} repetida na linha ${rowIndex + 1}: exercícios acrescentados por ordem.`);
+      } else plan[curDay] = { manha: [], tarde: [], piscina: pool };
     }
     if (curDay === null || !plan[curDay]) return;
 
-    parseExerciseRow(row, curDay, 'manha', plan, zonePl, {
+    parseExerciseRow(row, curDay, 'manha', plan, {
       cZona: COL.M_zona,
       cDesc: COL.M_desc,
       cMetros: COL.M_metros,
       cCiclo: COL.M_ciclo,
     });
 
-    parseExerciseRow(row, curDay, 'tarde', plan, zonePl, {
+    parseExerciseRow(row, curDay, 'tarde', plan, {
       cZona: COL.T_zona,
       cDesc: COL.T_desc,
       cMetros: COL.T_metros,
@@ -891,13 +951,16 @@ function parseWeekRows(rows) {
     });
   });
 
-  return { plan, zonePl };
+  validateImportedPlan(plan);
+  return { plan, zonePl: plannedZoneTotals(plan), warnings };
 }
 
-function parseExerciseRow(row, dayIdx, sess, plan, zonePl, { cZona, cDesc, cMetros, cCiclo }) {
+function parseExerciseRow(row, dayIdx, sess, plan, { cZona, cDesc, cMetros, cCiclo }) {
   const rawZona = norm(row[cZona]);
   const label = String(row[cZona] || '').trim();
   const rawDesc = String(row[cDesc] || '').trim();
+  const meterText = String(row[cMetros] ?? '').trim();
+  if (meterText && !/^\d+(?:[.,]\d+)?\s*m?$/i.test(meterText)) throw new Error(`Distância inválida em ${DIAS[dayIdx]} (${sess}).`);
   const metros = parseMeters(row[cMetros]);
 
   if (!rawZona && !rawDesc && !metros) return;
@@ -943,12 +1006,10 @@ function parseExerciseRow(row, dayIdx, sess, plan, zonePl, { cZona, cDesc, cMetr
 
   plan[dayIdx][sess].push({ tipo: 'ex', nome: '', desc: fullDesc, zona: validZona, metros, ciclo, target: '', isHeader: false });
 
-  const key = `${dayIdx}_${sess}`;
-  if (!zonePl[key]) zonePl[key] = zoneTotals();
-  if (validZona && metros) zonePl[key][validZona] = (zonePl[key][validZona] || 0) + metros;
 }
 
 function showLoadModal(parsed, filename) {
+  validateImportedPlan(parsed.plan);
   const hasExisting = Object.keys(S.weekPlan).length > 0;
   const dayCount = Object.keys(parsed.plan).length;
   const exCount = Object.values(parsed.plan).reduce((sum, day) => (
@@ -958,6 +1019,7 @@ function showLoadModal(parsed, filename) {
   showModal('Carregar plano',
     `<div style="font-size:13px;color:#6b85a8;">Ficheiro: <strong style="color:#a8c0e0">${esc(filename)}</strong></div>
      <div style="font-size:13px;color:#6b85a8;margin-top:6px;">Dias: <strong style="color:#a8c0e0">${dayCount}</strong> · Exercícios: <strong style="color:#a8c0e0">${exCount}</strong></div>
+     ${(parsed.warnings || []).map((warning) => `<div class="info-bar">${esc(warning)}</div>`).join('')}
      ${hasExisting ? '<div class="info-bar" style="margin-top:10px;">⚠️ Já existe um plano carregado. Escolha com cuidado.</div>' : ''}`,
     hasExisting ? [
       { label: 'Substituir plano', cls: 'btn-primary', fn: () => applyPlan(parsed, false) },
@@ -970,6 +1032,11 @@ function showLoadModal(parsed, filename) {
 }
 
 function applyPlan(parsed, merge) {
+  try { validateImportedPlan(parsed?.plan); } catch (err) { toast(err.message); return false; }
+  if (hasBlockingActiveSession()) {
+    toast('Termine ou descarte a sessão ativa antes de alterar o plano.');
+    return false;
+  }
   if (merge) {
     Object.keys(parsed.plan).forEach((k) => {
       if (!S.weekPlan[k]) S.weekPlan[k] = parsed.plan[k];
@@ -979,10 +1046,6 @@ function applyPlan(parsed, merge) {
         S.weekPlan[k].piscina ||= parsed.plan[k].piscina || '';
       }
     });
-    Object.keys(parsed.zonePl).forEach((k) => {
-      if (!S.zonePlan[k]) S.zonePlan[k] = zoneTotals();
-      ZONAS.forEach((z) => { S.zonePlan[k][z] = (S.zonePlan[k][z] || 0) + (parsed.zonePl[k][z] || 0); });
-    });
   } else {
     if (S.activeSession?.status === 'active' && (S.activeSession.running || hasSplits(S.activeSession))) {
       toast('Termine a sessão ativa antes de substituir o plano.');
@@ -991,13 +1054,14 @@ function applyPlan(parsed, merge) {
     }
     S.planId = uid('plan');
     S.weekPlan = parsed.plan;
-    S.zonePlan = parsed.zonePl;
+
     S.zoneLog = {};
     S.selectedExerciseId = '';
     S.selectedExercise = null;
     S.activeSession = null;
     S.weekLabel = String(parsed.filename || '').replace(/\.[^.]+$/, '') || 'Plano carregado';
   }
+  S.zonePlan = plannedZoneTotals(S.weekPlan);
   if (merge && parsed.filename && !S.weekLabel) S.weekLabel = String(parsed.filename).replace(/\.[^.]+$/, '');
   saveState('Plano carregado com sucesso!');
   closeModal();
