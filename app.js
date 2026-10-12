@@ -462,7 +462,6 @@ function selectExerciseByIndex(dayIdx, sess, idx, goLive = false) {
   }
   syncSessionButtons();
   saveState('Exercício selecionado.');
-
   if (goLive) S.tab = 'live';
   renderTab();
 }
@@ -2034,11 +2033,9 @@ function deleteResultSplit(resultId, splitId) {
   result.splits = result.splits.filter((sp) => String(sp.id) !== String(splitId));
   if (!result.splits.length) {
     S.results = S.results.filter((r) => String(r.id) !== String(resultId));
-
   } else {
     result.lastEditedAt = new Date().toISOString();
     recomputeResultSplits(result);
-
   }
   saveState(result.splits.length ? 'Parcial apagado.' : 'Resultado removido porque ficou sem parciais.');
   renderTab();

@@ -28,3 +28,30 @@ test('finished Live sessions reject stale mutation handlers and cannot overwrite
   assert.doesNotMatch(h.run('renderLiveSplits()'), /showEditLiveSplitModal|deleteLiveSplit|showMoveLiveSplitModal/);
   assert.match(h.run('renderLiveSplits()'), /resultados/);
 });
+
+test('athlete split sequences remain independent and a finished group logs its zone once', () => {
+  const h = createApp(); startSession(h);
+  h.run(`setActiveAthlete('2'); toggleLiveSW(); S.activeSession.start=Date.now()-2000; takeLiveSplit();
+    setActiveAthlete('1'); S.activeSession.start=Date.now()-4000; takeLiveSplit(); toggleLiveSW()`);
+  const lists = h.json('S.activeSession.splitsByAthlete');
+  assert.deepEqual(lists['1'].map(s=>s.splitNo), [1,2]);
+  assert.deepEqual(lists['2'].map(s=>s.splitNo), [1]);
+  assert.equal(lists['1'][1].lap, lists['1'][1].cum-lists['1'][0].cum);
+  assert.equal(lists['2'][0].lap, lists['2'][0].cum);
+  h.run('finishLiveSession(); finishLiveSession()');
+  assert.equal(h.run('S.results.length'), 2);
+  assert.equal(h.run(`S.zoneLog['0_manha'].A2`), 100);
+});
+
+test('moving and undoing active splits still recomputes laps and preserves correction metadata', () => {
+  const h = createApp(); startSession(h);
+  h.run(`globalThis.splitId=S.activeSession.splitsByAthlete['1'][0].id;
+    $('editSplitTime').value='0'; saveEditedLiveSplitTime('1',splitId);
+    $('editSplitTime').value='5'; saveEditedLiveSplitTime('1',splitId);
+    $('moveSplitAthlete').value='2'; saveMoveLiveSplit('1',splitId)`);
+  assert.equal(h.run(`S.activeSession.splitsByAthlete['1'].length`), 0);
+  assert.equal(h.run(`S.activeSession.splitsByAthlete['2'][0].lap`), 5000);
+  assert.equal(h.run(`S.activeSession.splitsByAthlete['2'][0].corrected`), true);
+  h.run(`undoLastLiveSplit()`);
+  assert.equal(h.run('totalSplitCount()'), 0);
+});
