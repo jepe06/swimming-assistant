@@ -48,6 +48,7 @@ function defaultState() {
     tab: 'plano',
     sessao: 'manha',
     dayIdx: ((new Date().getDay() + 6) % 7), // Monday = 0
+    planId: '',
     weekPlan: {},
     zonePlan: {},
     athletes: [],
@@ -194,6 +195,7 @@ function loadState() {
         athletes: Array.isArray(d.athletes) ? d.athletes : [],
         results: Array.isArray(d.results) ? d.results : [],
         zoneLog: d.zoneLog || {},
+        planId: d.planId || '',
         weekPlan: d.weekPlan || {},
         zonePlan: d.zonePlan || {},
         weekLabel: d.weekLabel || '',
@@ -203,6 +205,7 @@ function loadState() {
         liveSplitDistance: Number(d.liveSplitDistance) || 25,
         activeSession: d.activeSession || null,
       };
+      migrateExerciseIdentity();
       return;
     } catch (err) {
       console.warn('Ignoring broken saved state:', err);
@@ -212,10 +215,12 @@ function loadState() {
 
 function saveState() {
   try {
+    ensurePlanIdentity();
     localStorage.setItem(STORE_KEY, JSON.stringify({
       athletes: S.athletes,
       results: S.results,
       zoneLog: S.zoneLog,
+      planId: S.planId,
       weekPlan: S.weekPlan,
       zonePlan: S.zonePlan,
       weekLabel: S.weekLabel,
@@ -307,6 +312,50 @@ function dayTabsHTML() {
 // ============================================================
 // EXERCISE SELECTION
 // ============================================================
+function ensurePlanIdentity() {
+  if (!Object.keys(S.weekPlan).length) return;
+  S.planId ||= uid('plan');
+  Object.values(S.weekPlan).forEach((day) => {
+    ['manha', 'tarde'].forEach((sess) => {
+      (day[sess] || []).forEach((exercise) => {
+        if (!exercise.isHeader) exercise.id ||= uid('exercise');
+      });
+    });
+  });
+}
+
+function migrateExerciseIdentity() {
+  const legacy = (id) => /^\d+_(manha|tarde)_\d+$/.test(id || '');
+  ensurePlanIdentity();
+  // Positional IDs cannot prove which week's exercise a saved result belongs to.
+  const historicalIds = new Map();
+  S.results.forEach((result) => {
+    if (!legacy(result.exerciseId)) return;
+    const key = `${result.sessionId || result.id}:${result.exerciseId}`;
+    if (!historicalIds.has(key)) historicalIds.set(key, uid('legacyExercise'));
+    result.exerciseId = historicalIds.get(key);
+    result.planId = '';
+  });
+  const session = S.activeSession;
+  if (legacy(session?.exerciseSnapshot?.id)) {
+    const previousId = session.exerciseSnapshot.id;
+    session.exerciseId = uid('legacyExercise');
+    session.exerciseSnapshot = { ...session.exerciseSnapshot, id: session.exerciseId, planId: '' };
+    if (S.selectedExerciseId === previousId) {
+      S.selectedExerciseId = session.exerciseId;
+      S.selectedExercise = { ...session.exerciseSnapshot };
+    }
+  }
+  if (legacy(S.selectedExerciseId)) {
+    const [day, sess, index] = S.selectedExerciseId.split('_');
+    const snapshot = buildExerciseSnapshot(Number(day), sess, Number(index));
+    S.selectedExercise = snapshot;
+    S.selectedExerciseId = snapshot?.id || '';
+  }
+  // Persist assigned IDs once; future reloads retain them.
+  saveState();
+}
+
 function getBlocks(dayIdx = S.dayIdx, sess = S.sessao) {
   return (S.weekPlan[dayIdx] || {})[sess] || [];
 }
@@ -316,6 +365,7 @@ function getPool(dayIdx = S.dayIdx) {
 }
 
 function getExerciseEntries(dayIdx = S.dayIdx, sess = S.sessao) {
+  ensurePlanIdentity();
   const blocks = getBlocks(dayIdx, sess);
   const entries = [];
   let blockName = 'Sem bloco';
@@ -326,7 +376,7 @@ function getExerciseEntries(dayIdx = S.dayIdx, sess = S.sessao) {
       blockTipo = b.tipo || 'tarefa';
     } else {
       entries.push({
-        id: `${dayIdx}_${sess}_${idx}`,
+        id: b.id,
         dayIdx,
         sess,
         idx,
@@ -345,6 +395,7 @@ function buildExerciseSnapshot(dayIdx, sess, idx) {
   const ex = entry.ex;
   const snap = {
     id: entry.id,
+    planId: S.planId,
     dayIdx,
     sess,
     day: DIAS[dayIdx],
@@ -365,14 +416,10 @@ function buildExerciseSnapshot(dayIdx, sess, idx) {
 
 function getSelectedExercise() {
   if (!S.selectedExerciseId) return null;
-  const parts = S.selectedExerciseId.split('_');
-  if (parts.length >= 3) {
-    const idx = Number(parts[2]);
-    const fresh = buildExerciseSnapshot(Number(parts[0]), parts[1], idx);
-    if (fresh) {
-      S.selectedExercise = fresh;
-      return fresh;
-    }
+  const fresh = snapshotFromExerciseId(S.selectedExerciseId);
+  if (fresh) {
+    S.selectedExercise = fresh;
+    return fresh;
   }
   return S.selectedExercise || null;
 }
@@ -735,6 +782,7 @@ function clearCurrentPlan() {
     toast('Termine ou descarte a sessão ativa antes de limpar o plano.');
     return;
   }
+  S.planId = '';
   S.weekPlan = {};
   S.zonePlan = {};
   S.zoneLog = {};
@@ -936,6 +984,7 @@ function applyPlan(parsed, merge) {
       closeModal();
       return;
     }
+    S.planId = uid('plan');
     S.weekPlan = parsed.plan;
     S.zonePlan = parsed.zonePl;
     S.zoneLog = {};
@@ -1381,6 +1430,7 @@ function finishLiveSession() {
       athlete: athlete?.nome || splits[0]?.athleteName || 'Atleta',
       bloco: ex.blockName || '—',
       exerciseId: ex.id,
+      planId: ex.planId || '',
       exerciseDesc: ex.desc || '',
       zone: ex.zona || '',
       meters: ex.metros || 0,
@@ -1802,6 +1852,7 @@ function resultSnapshot(result) {
   if (!result) return null;
   return {
     id: result.exerciseId || '',
+    planId: result.planId || '',
     dayIdx: result.diaIdx,
     sess: result.sessao,
     day: result.dia,
@@ -1844,7 +1895,7 @@ function recomputeResultSplits(result) {
   });
 }
 
-function exerciseOptionsHTML(selectedExerciseId = '') {
+function exerciseOptionsHTML() {
   const entries = [];
   Object.keys(S.weekPlan || {}).forEach((dayKey) => {
     ['manha', 'tarde'].forEach((sess) => {
@@ -1855,15 +1906,19 @@ function exerciseOptionsHTML(selectedExerciseId = '') {
   return '<option value="">Manter exercício atual</option>' + entries.map((entry) => {
     const snap = buildExerciseSnapshot(entry.dayIdx, entry.sess, entry.idx);
     const label = `${snap.day} · ${snap.sessionLabel} · ${snap.blockName} · ${snap.zona || '—'} · ${snap.desc || '—'}`;
-    return `<option value="${esc(snap.id)}" ${snap.id === selectedExerciseId ? 'selected' : ''}>${esc(label)}</option>`;
+    return `<option value="${esc(snap.id)}">${esc(label)}</option>`;
   }).join('');
 }
 
 function snapshotFromExerciseId(exerciseId) {
   if (!exerciseId) return null;
-  const parts = String(exerciseId).split('_');
-  if (parts.length < 3) return null;
-  return buildExerciseSnapshot(Number(parts[0]), parts[1], Number(parts[2]));
+  for (const dayKey of Object.keys(S.weekPlan)) {
+    for (const sess of ['manha', 'tarde']) {
+      const entry = getExerciseEntries(Number(dayKey), sess).find((e) => e.id === exerciseId);
+      if (entry) return buildExerciseSnapshot(entry.dayIdx, sess, entry.idx);
+    }
+  }
+  return null;
 }
 
 function applySnapshotToResult(result, snap) {
@@ -1873,6 +1928,7 @@ function applySnapshotToResult(result, snap) {
   result.sessao = snap.sess;
   result.bloco = snap.blockName || '—';
   result.exerciseId = snap.id;
+  result.planId = snap.planId || '';
   result.exerciseDesc = snap.desc || '';
   result.zone = snap.zona || '';
   result.meters = snap.metros || 0;
@@ -1900,7 +1956,7 @@ function showEditResultModal(resultId) {
       <label style="flex:1;"><span class="form-label">Atleta</span><select class="sel" id="editResultAthlete">${athleteOptions}</select></label>
     </div>
     <div class="form-row">
-      <label style="flex:1;"><span class="form-label">Exercício</span><select class="sel" id="editResultExercise">${exerciseOptionsHTML(result.exerciseId)}</select></label>
+      <label style="flex:1;"><span class="form-label">Exercício</span><select class="sel" id="editResultExercise">${exerciseOptionsHTML()}</select></label>
     </div>
     <div class="info-bar">Atual: <strong>${esc(result.athlete)}</strong> · ${esc(result.bloco)} · ${esc(result.exerciseDesc || '—')}</div>`,
     [
