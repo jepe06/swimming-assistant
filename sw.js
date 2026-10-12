@@ -1,8 +1,10 @@
-const CACHE = 'swimcoach-v9-reliable-records';
+const CACHE = 'swimcoach-v10-imports-backups';
 const ASSETS = [
   './',
   './index.html',
   './app.js',
+  './backup.js',
+  './vendor/sheetjs/xlsx.full.min.js',
   './style.css',
   './manifest.json',
   './icons/icon-192.png',

@@ -41,12 +41,12 @@ Track zone completion
 ├── index.html              # Main HTML shell
 ├── style.css               # Application styles
 ├── app.js                  # Main application logic
+├── backup.js               # Backup format validation
+├── vendor/sheetjs/          # Pinned Excel parser and license
+├── tests/                  # Node regression tests
 ├── manifest.json           # PWA metadata
 ├── sw.js                   # Service Worker cache logic
 ├── vercel.json             # Vercel headers for Service Worker/app updates
-├── GUIA_INSTALACAO.md      # Portuguese installation guide
-├── TESTING_PHASE3.md       # Split-intelligence testing checklist
-├── TESTING_PHASE4.md       # Corrections/editing testing checklist
 └── README.md               # Project documentation
 ```
 
@@ -63,13 +63,9 @@ Track zone completion
 
 ### Important PWA note
 
-The app currently loads the XLSX parser from a CDN:
+The app ships SheetJS Community Edition **0.20.3** locally in `vendor/sheetjs/`. It includes the fixes for CVE-2023-30533 and CVE-2024-22363. The service worker caches the parser and backup code with the application, so spreadsheet imports work offline after a successful initial load/cache. There is no runtime XLSX CDN dependency.
 
-```html
-https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js
-```
-
-That means the first plan import requires internet access unless the library has already been cached by the browser. For true offline-first poolside use, vendor this file locally and update `index.html` and `sw.js` to cache it.
+See [vendor provenance and upgrade instructions](vendor/sheetjs/README.md). First-time loading of the app still needs a connection. Installed-PWA update activation and physical-tablet testing remain follow-up work.
 
 ## Browser storage model
 
@@ -91,7 +87,7 @@ This means:
 - data does not automatically sync between tablets;
 - clearing browser data can delete the app state;
 - reinstalling the PWA or changing browser profile may lose local data;
-- exporting CSV is the current backup mechanism.
+- full JSON backup/restore is available in **Gerir plano**; CSV exports results for spreadsheets.
 
 ## Excel import format
 
@@ -329,7 +325,7 @@ Finished Live sessions are read-only. Use **Resultados** to correct saved splits
 
 Plans and exercises now have persistent identities. Replacing a week cannot silently attach old results to new rows. The result editor defaults to **Manter exercício atual**; choose another exercise explicitly to reassign it. Existing data is migrated automatically, preserving historical snapshots and active sessions. Historical results whose original plan cannot be identified stay detached until explicitly reassigned.
 
-If local storage fails, a persistent warning offers **Tentar guardar** and CSV export. Keep the page open until saving succeeds. Results remain in memory, but closing the page can lose unsaved changes. CSV exports result records only; full plan/athlete/zone backup and restore is not yet available.
+If local storage fails, a persistent warning offers **Tentar guardar** and CSV export. Keep the page open until saving succeeds or a full backup has been downloaded. Changes remain in memory, but closing the page can lose them. Use **Descarregar cópia** in the warning to preserve all current in-memory data, including unfinished splits. CSV still exports result records only.
 
 CSV now handles quotes, commas and multiline text correctly. Formula-leading text is prefixed with an apostrophe for spreadsheet safety, and the final `CorrigidoEm` column contains the latest correction timestamp when available. Older correction metadata that was already lost cannot be reconstructed.
 
@@ -345,10 +341,28 @@ There is no application dependency installation or build step. Run regression te
 
 ```sh
 node --check app.js
+node --check backup.js
 node --check sw.js
 node --test tests/*.test.cjs
 ```
 
-Pull requests run these checks in GitHub Actions. The tests cover correction persistence, finished-session safeguards, exercise identity migration, independent athlete timings, storage failures and CSV serialization using simulated browser APIs. Real tablet and offline-update testing remains necessary before deployment.
+Pull requests run these checks in GitHub Actions. The tests cover record reliability, import validation, XLSX/XLS reading, backup round trips, invalid restores, storage failures, and vendored-library integrity. App tests use simulated browser APIs; workbook tests read actual generated binary workbooks. Real tablet and offline-update testing remains necessary before deployment.
 
-See [the phased implementation plan](docs/implementation-plan.md) for migration details, validation scope, and the remaining import, SheetJS security, offline-update and accessibility work. The current CDN-hosted SheetJS 0.18.5 dependency has not yet been upgraded.
+See [the phased implementation plan](docs/implementation-plan.md) for migration details, validation scope, and the completed import/recovery work and remaining offline-update, timer and accessibility work.
+
+
+## Safe plan imports
+
+Import `.xlsx` or `.xls` files up to **10 MB**, with no more than **10,000 rows / 256 columns** on the first worksheet. Only the first worksheet is used, with the column layout above. Files without recognized exercises or explicit `FOLGA` entries are rejected before replacing a plan. Rest-day-only plans are valid.
+
+Repeated headers for the same day append exercises in spreadsheet order, with a warning in the import preview. Conflicting pool sizes for one day reject the import; accumulation with an existing plan also rejects conflicting pools. Planned zone totals are recalculated from the resulting exercise rows, excluding block headers. Invalid/negative distances are rejected. Importing or restoring cannot replace an active Live session with times.
+
+## Full backup and restore
+
+In **Plano → Gerir plano**, choose **Descarregar cópia de segurança** to download a JSON backup. It includes athletes, the full plan and IDs, zone totals/logs, results and correction metadata, selected exercise/athlete, and any Live session with unfinished splits. It reads current memory, so it can preserve changes even when local storage is full.
+
+A running timer continues on the original page. The backup captures its elapsed time and restores the session **paused**; time spent away from the app is not added. Resume timing explicitly after restoring.
+
+Choose **Restaurar cópia de segurança**, select the JSON file, review its counts, and type **RESTAURAR**. This replaces all local data, rather than merging it. The preview offers a download of the current data first. Cancel leaves data unchanged. Validation and a successful single local-storage write precede replacement; if storage is full or unavailable, the current data stays intact.
+
+Backups use the versioned `swimcoach-backup` format, version **1**, and are limited to **10 MB**. Unknown versions, malformed structures, duplicate IDs and unsafe identifiers are rejected. Raw localStorage dumps and CSV files are not restore formats. Backups are unencrypted files containing athlete names and training data; store them appropriately. They do not include cached app code or recover data already lost before export.

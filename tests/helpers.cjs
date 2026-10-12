@@ -6,7 +6,7 @@ function createApp(saved) {
   const elements = new Map();
   const storage = new Map(saved ? [['swim_coach_v6_phase4', JSON.stringify(saved)]] : []);
   const app = vm.createContext({
-    console: { warn() {} }, Date, Math, Blob, URL,
+    console: { warn() {} }, Date, Math, Blob, URL, TextEncoder,
     setTimeout: () => 1, clearTimeout() {}, setInterval: () => 1, clearInterval() {},
     navigator: {}, window: { addEventListener() {} },
     document: {
@@ -23,6 +23,7 @@ function createApp(saved) {
       removeItem: key => storage.delete(key),
     },
   });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../backup.js'), 'utf8'), app);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../app.js'), 'utf8'), app);
   return { app, elements, storage, run: code => vm.runInContext(code, app), json: code => JSON.parse(vm.runInContext(`JSON.stringify(${code})`, app)) };
 }
