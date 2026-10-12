@@ -219,18 +219,18 @@ function loadState() {
 
 function persistedState() {
   return {
-      athletes: S.athletes,
-      results: S.results,
-      zoneLog: S.zoneLog,
-      planId: S.planId,
-      weekPlan: S.weekPlan,
-      zonePlan: S.zonePlan,
-      weekLabel: S.weekLabel,
-      selectedExerciseId: S.selectedExerciseId,
-      selectedExercise: S.selectedExercise,
-      activeAthleteId: S.activeAthleteId,
-      liveSplitDistance: S.liveSplitDistance,
-      activeSession: safeSessionForSave(S.activeSession),
+    athletes: S.athletes,
+    results: S.results,
+    zoneLog: S.zoneLog,
+    planId: S.planId,
+    weekPlan: S.weekPlan,
+    zonePlan: S.zonePlan,
+    weekLabel: S.weekLabel,
+    selectedExerciseId: S.selectedExerciseId,
+    selectedExercise: S.selectedExercise,
+    activeAthleteId: S.activeAthleteId,
+    liveSplitDistance: S.liveSplitDistance,
+    activeSession: safeSessionForSave(S.activeSession),
   };
 }
 
@@ -1045,9 +1045,10 @@ function parseExerciseRow(row, dayIdx, sess, plan, { cZona, cDesc, cMetros, cCic
   const rawZona = norm(row[cZona]);
   const label = String(row[cZona] || '').trim();
   const rawDesc = String(row[cDesc] || '').trim();
-  const meterText = String(row[cMetros] ?? '').trim();
+  const meterText = String(row[cMetros] ?? '').replace(/\s+/g, '');
   if (meterText && !/^\d+(?:[.,]\d+)?\s*m?$/i.test(meterText)) throw new Error(`Distância inválida em ${DIAS[dayIdx]} (${sess}).`);
   const metros = parseMeters(row[cMetros]);
+  if (meterText && (!Number.isFinite(Number(meterText.replace(/m$/i, '').replace(',', '.'))) || !Number.isSafeInteger(metros))) throw new Error(`Distância demasiado grande em ${DIAS[dayIdx]}.`);
 
   if (!rawZona && !rawDesc && !metros) return;
 
@@ -1124,6 +1125,14 @@ function applyPlan(parsed, merge) {
     return false;
   }
   if (merge) {
+    for (const [day, sessions] of Object.entries(parsed.plan)) {
+      const existingPool = String(S.weekPlan[day]?.piscina || '').trim().toUpperCase();
+      const incomingPool = String(sessions.piscina || '').trim().toUpperCase();
+      if (existingPool && incomingPool && existingPool !== incomingPool) {
+        toast(`Piscinas diferentes para ${DIAS[Number(day)]}. Substitua o plano em vez de acumular.`);
+        return false;
+      }
+    }
     Object.keys(parsed.plan).forEach((k) => {
       if (!S.weekPlan[k]) S.weekPlan[k] = parsed.plan[k];
       else {
@@ -1133,14 +1142,8 @@ function applyPlan(parsed, merge) {
       }
     });
   } else {
-    if (S.activeSession?.status === 'active' && (S.activeSession.running || hasSplits(S.activeSession))) {
-      toast('Termine a sessão ativa antes de substituir o plano.');
-      closeModal();
-      return;
-    }
     S.planId = uid('plan');
     S.weekPlan = parsed.plan;
-
     S.zoneLog = {};
     S.selectedExerciseId = '';
     S.selectedExercise = null;

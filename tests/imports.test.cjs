@@ -26,3 +26,14 @@ test('accumulation recomputes zone totals and refuses changes during active timi
  assert.equal(h.run('applyPlan(parseWeekRows(rows),true)'),false);
  h.run('finishLiveSession();applyPlan(parseWeekRows(rows),true)'); assert.equal(h.run(`S.zonePlan['0_manha'].A2`),300);
 });
+
+test('accumulation rejects conflicting pools before changing any day', () => {
+ const h=createApp();startSession(h);h.run('finishLiveSession()');const before=h.json('S');
+ h.app.rows=[row('SEGUNDA','New',200,'P50'),row('TERÇA','New day',100)];
+ assert.equal(h.run('applyPlan(parseWeekRows(rows),true)'),false);assert.deepEqual(h.json('S'),before);
+});
+test('meter parsing retains spaced values but rejects unsafe magnitudes', () => {
+ const h=createApp();h.app.rows=[row('SEGUNDA','Long swim','1 000 m')];
+ assert.equal(h.run('parseWeekRows(rows).plan[0].manha[0].metros'),1000);
+ h.app.rows=[row('SEGUNDA','Invalid','9'.repeat(400))];assert.throws(()=>h.run('parseWeekRows(rows)'),/demasiado grande/);
+});

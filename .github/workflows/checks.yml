@@ -19,6 +19,7 @@ jobs:
       - name: Check JavaScript syntax
         run: |
           node --check app.js
+          node --check backup.js
           node --check sw.js
       - name: Run regression tests
         run: node --test tests/*.test.cjs
