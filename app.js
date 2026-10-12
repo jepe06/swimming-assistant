@@ -1022,6 +1022,7 @@ function currentSplitDistance() {
 }
 
 function setSplitDistance(value) {
+  if (S.activeSession?.status === 'finished') return;
   const dist = Number(value);
   if (![25, 50].includes(dist)) return;
   if (S.activeSession?.status === 'active' && hasSplits(S.activeSession)) {
@@ -1070,12 +1071,13 @@ function createLiveSession(snapshot) {
 }
 
 function ensureLiveSession() {
+  if (S.activeSession?.status === 'finished') return null;
   const snapshot = getSelectedExercise();
   if (!snapshot) {
     toast('Selecione primeiro um exercício no plano.');
     return null;
   }
-  if (!S.activeSession || S.activeSession.status === 'finished') {
+  if (!S.activeSession) {
     S.activeSession = createLiveSession(snapshot);
     saveState();
     return S.activeSession;
@@ -1213,6 +1215,7 @@ function recomputeAthleteSplits(athleteId) {
 }
 
 function undoLastLiveSplit() {
+  if (S.activeSession?.status !== 'active') return;
   const session = S.activeSession;
   if (!session?.history?.length) {
     toast('Sem parciais para anular.');
@@ -1228,6 +1231,7 @@ function undoLastLiveSplit() {
 }
 
 function deleteLiveSplit(athleteId, splitId) {
+  if (S.activeSession?.status !== 'active') return;
   const session = S.activeSession;
   if (!session?.splitsByAthlete?.[athleteId]) return;
   session.splitsByAthlete[athleteId] = session.splitsByAthlete[athleteId].filter((s) => s.id !== splitId);
@@ -1245,6 +1249,7 @@ function findLiveSplit(athleteId, splitId) {
 }
 
 function showEditLiveSplitModal(athleteId, splitId) {
+  if (S.activeSession?.status !== 'active') return;
   const split = findLiveSplit(athleteId, splitId);
   if (!split) {
     toast('Parcial não encontrado.');
@@ -1263,6 +1268,7 @@ function showEditLiveSplitModal(athleteId, splitId) {
 }
 
 function saveEditedLiveSplitTime(athleteId, splitId) {
+  if (S.activeSession?.status !== 'active') return;
   const split = findLiveSplit(athleteId, splitId);
   if (!split) {
     toast('Parcial não encontrado.');
@@ -1287,6 +1293,7 @@ function saveEditedLiveSplitTime(athleteId, splitId) {
 }
 
 function showMoveLiveSplitModal(athleteId, splitId) {
+  if (S.activeSession?.status !== 'active') return;
   const split = findLiveSplit(athleteId, splitId);
   if (!split) {
     toast('Parcial não encontrado.');
@@ -1314,6 +1321,7 @@ function showMoveLiveSplitModal(athleteId, splitId) {
 }
 
 function saveMoveLiveSplit(fromAthleteId, splitId) {
+  if (S.activeSession?.status !== 'active') return;
   const session = S.activeSession;
   const toAthleteId = String($('moveSplitAthlete')?.value || '');
   if (!session || !toAthleteId || String(fromAthleteId) === toAthleteId) {
@@ -1342,6 +1350,7 @@ function saveMoveLiveSplit(fromAthleteId, splitId) {
 }
 
 function finishLiveSession() {
+  if (S.activeSession?.status !== 'active') return;
   const session = S.activeSession;
   if (!session || !hasSplits(session)) {
     toast('Sem parciais para terminar.');
@@ -1393,6 +1402,9 @@ function finishLiveSession() {
         targetExpectedMs: s.targetExpectedMs ?? null,
         lapTargetMs: s.lapTargetMs ?? null,
         targetDiffMs: s.targetDiffMs,
+        corrected: !!s.corrected,
+        originalCum: s.originalCum,
+        correctedAt: s.correctedAt,
       })),
     });
   });
@@ -1527,7 +1539,7 @@ function renderAthleteChips() {
 }
 
 function renderSplitDistanceSelector() {
-  const locked = S.activeSession?.status === 'active' && hasSplits(S.activeSession);
+  const locked = S.activeSession?.status === 'finished' || hasSplits(S.activeSession);
   const dist = currentSplitDistance();
   return `<div class="split-distance">
     <span>Parcial:</span>
@@ -1539,6 +1551,7 @@ function renderSplitDistanceSelector() {
 
 function renderLiveSplits() {
   const session = S.activeSession;
+  if (session?.status === 'finished') return `<div class="info-bar">Sessão terminada. Consulte e corrija os parciais em <button class="btn btn-secondary btn-sm" onclick="showTab('resultados')">Resultados</button>.</div>`;
   if (!session || !hasSplits(session)) return '<div class="empty-state" style="padding:18px 8px;">Sem parciais registados nesta sessão.</div>';
 
   const athleteIds = Object.keys(session.splitsByAthlete).filter((aid) => session.splitsByAthlete[aid]?.length);
