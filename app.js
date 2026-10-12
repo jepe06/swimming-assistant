@@ -42,6 +42,7 @@ const HEADER_NAMES = ['AQUECIMENTO', 'TAREFA', 'RECUPERACAO', 'FOLGA'];
 let S = defaultState();
 let toastTimer = null;
 let wakeLock = null;
+let hasUnsavedChanges = false;
 
 function defaultState() {
   return {
@@ -213,7 +214,7 @@ function loadState() {
   }
 }
 
-function saveState() {
+function saveState(successMessage = '') {
   try {
     ensurePlanIdentity();
     localStorage.setItem(STORE_KEY, JSON.stringify({
@@ -230,9 +231,16 @@ function saveState() {
       liveSplitDistance: S.liveSplitDistance,
       activeSession: safeSessionForSave(S.activeSession),
     }));
+    hasUnsavedChanges = false;
+    if ($('saveWarning')) $('saveWarning').hidden = true;
+    if (successMessage) toast(successMessage);
+    return true;
   } catch (err) {
+    hasUnsavedChanges = true;
+    if ($('saveWarning')) $('saveWarning').hidden = false;
     console.warn('Save failed:', err);
-    toast('Não foi possível guardar localmente.');
+    toast('Alterações não guardadas. Tente guardar novamente.');
+    return false;
   }
 }
 
@@ -453,8 +461,8 @@ function selectExerciseByIndex(dayIdx, sess, idx, goLive = false) {
     S.liveSplitDistance = defaultSplitDistance(snap.pool);
   }
   syncSessionButtons();
-  saveState();
-  toast('Exercício selecionado.');
+  saveState('Exercício selecionado.');
+
   if (goLive) S.tab = 'live';
   renderTab();
 }
@@ -791,10 +799,9 @@ function clearCurrentPlan() {
   S.selectedExercise = null;
   S.activeSession = null;
   S.liveSplitDistance = 25;
-  saveState();
+  saveState('Plano atual limpo. Atletas e resultados foram mantidos.');
   closeModal();
   renderTab();
-  toast('Plano atual limpo. Atletas e resultados foram mantidos.');
 }
 
 function showClearAllConfirm() {
@@ -825,11 +832,10 @@ function clearAllData() {
     localStorage.removeItem(STORE_KEY);
     OLD_STORE_KEYS.forEach((key) => localStorage.removeItem(key));
   } catch (_) {}
-  saveState();
+  saveState('Todos os dados foram apagados.');
   closeModal();
   syncSessionButtons();
   renderTab();
-  toast('Todos os dados foram apagados.');
 }
 
 // ============================================================
@@ -994,10 +1000,9 @@ function applyPlan(parsed, merge) {
     S.weekLabel = String(parsed.filename || '').replace(/\.[^.]+$/, '') || 'Plano carregado';
   }
   if (merge && parsed.filename && !S.weekLabel) S.weekLabel = String(parsed.filename).replace(/\.[^.]+$/, '');
-  saveState();
+  saveState('Plano carregado com sucesso!');
   closeModal();
   renderTab();
-  toast('Plano carregado com sucesso!');
 }
 
 // ============================================================
@@ -1055,10 +1060,9 @@ function saveBlockModal() {
     S.zonePlan[key][zona] = (S.zonePlan[key][zona] || 0) + metros;
   }
 
-  saveState();
+  saveState('Bloco adicionado!');
   closeModal();
   renderTab();
-  toast('Bloco adicionado!');
 }
 
 // ============================================================
@@ -1274,9 +1278,8 @@ function undoLastLiveSplit() {
   const list = session.splitsByAthlete[last.athleteId] || [];
   session.splitsByAthlete[last.athleteId] = list.filter((s) => s.id !== last.splitId);
   recomputeAthleteSplits(last.athleteId);
-  saveState();
+  saveState('Último parcial anulado.');
   renderTab();
-  toast('Último parcial anulado.');
 }
 
 function deleteLiveSplit(athleteId, splitId) {
@@ -1286,9 +1289,8 @@ function deleteLiveSplit(athleteId, splitId) {
   session.splitsByAthlete[athleteId] = session.splitsByAthlete[athleteId].filter((s) => s.id !== splitId);
   session.history = (session.history || []).filter((h) => h.splitId !== splitId);
   recomputeAthleteSplits(athleteId);
-  saveState();
+  saveState('Parcial removido.');
   renderTab();
-  toast('Parcial removido.');
 }
 
 function findLiveSplit(athleteId, splitId) {
@@ -1335,10 +1337,9 @@ function saveEditedLiveSplitTime(athleteId, splitId) {
   split.corrected = true;
   split.correctedAt = new Date().toISOString();
   recomputeAthleteSplits(athleteId);
-  saveState();
+  saveState('Tempo corrigido.');
   closeModal();
   renderTab();
-  toast('Tempo corrigido.');
 }
 
 function showMoveLiveSplitModal(athleteId, splitId) {
@@ -1392,10 +1393,9 @@ function saveMoveLiveSplit(fromAthleteId, splitId) {
   (session.history || []).forEach((h) => { if (String(h.splitId) === String(splitId)) h.athleteId = toAthleteId; });
   recomputeAthleteSplits(fromAthleteId);
   recomputeAthleteSplits(toAthleteId);
-  saveState();
+  saveState('Parcial movido.');
   closeModal();
   renderTab();
-  toast('Parcial movido.');
 }
 
 function finishLiveSession() {
@@ -1459,9 +1459,8 @@ function finishLiveSession() {
     });
   });
   const loggedZone = autoLogFinishedSessionZone(session);
-  saveState();
+  saveState(loggedZone ? 'Sessão terminada, resultados guardados e zonas atualizadas.' : 'Sessão terminada e resultados guardados.');
   renderTab();
-  toast(loggedZone ? 'Sessão terminada, resultados guardados e zonas atualizadas.' : 'Sessão terminada e resultados guardados.');
 }
 
 function clearFinishedSession() {
@@ -1552,10 +1551,9 @@ function saveExerciseStructureFromModal() {
     manuallyEdited: true,
   }, session.exerciseSnapshot, splitDistance);
   session.exerciseSnapshot.structure = session.exerciseStructure;
-  saveState();
+  saveState('Estrutura guardada.');
   closeModal();
   renderTab();
-  toast('Estrutura guardada.');
 }
 
 function autoLogFinishedSessionZone(session) {
@@ -1776,9 +1774,8 @@ function registerZone() {
   const key = `${S.dayIdx}_${S.sessao}`;
   if (!S.zoneLog[key]) S.zoneLog[key] = zoneTotals();
   S.zoneLog[key][zona] = (S.zoneLog[key][zona] || 0) + metros;
-  saveState();
+  saveState(`+${metros}m na zona ${zona}`);
   renderTab();
-  toast(`+${metros}m na zona ${zona}`);
 }
 
 function clearZoneLog(zona) {
@@ -1820,9 +1817,8 @@ function addAthlete() {
   const athlete = { id: Date.now(), nome, grupo };
   S.athletes.push(athlete);
   if (!S.activeAthleteId) S.activeAthleteId = String(athlete.id);
-  saveState();
+  saveState(`${nome} adicionado!`);
   renderTab();
-  toast(`${nome} adicionado!`);
 }
 
 function removeAthlete(id) {
@@ -1835,10 +1831,9 @@ function removeAthlete(id) {
 function confirmRemoveAthlete(id) {
   S.athletes = S.athletes.filter((a) => a.id !== id);
   if (String(S.activeAthleteId) === String(id)) S.activeAthleteId = '';
-  saveState();
+  saveState('Atleta removido.');
   closeModal();
   renderTab();
-  toast('Atleta removido.');
 }
 
 // ============================================================
@@ -1982,10 +1977,9 @@ function saveResultEdit(resultId) {
   if (snap) applySnapshotToResult(result, snap);
   else recomputeResultSplits(result);
   result.lastEditedAt = new Date().toISOString();
-  saveState();
+  saveState('Resultado atualizado.');
   closeModal();
   renderTab();
-  toast('Resultado atualizado.');
 }
 
 function findResultSplit(resultId, splitId) {
@@ -2026,12 +2020,12 @@ function saveEditedResultSplitTime(resultId, splitId) {
   if (split.originalCum === undefined) split.originalCum = split.cum;
   split.cum = ms;
   split.corrected = true;
+  split.correctedAt = new Date().toISOString();
   result.lastEditedAt = new Date().toISOString();
   recomputeResultSplits(result);
-  saveState();
+  saveState('Tempo corrigido.');
   closeModal();
   renderTab();
-  toast('Tempo corrigido.');
 }
 
 function deleteResultSplit(resultId, splitId) {
@@ -2040,13 +2034,13 @@ function deleteResultSplit(resultId, splitId) {
   result.splits = result.splits.filter((sp) => String(sp.id) !== String(splitId));
   if (!result.splits.length) {
     S.results = S.results.filter((r) => String(r.id) !== String(resultId));
-    toast('Resultado removido porque ficou sem parciais.');
+
   } else {
     result.lastEditedAt = new Date().toISOString();
     recomputeResultSplits(result);
-    toast('Parcial apagado.');
+
   }
-  saveState();
+  saveState(result.splits.length ? 'Parcial apagado.' : 'Resultado removido porque ficou sem parciais.');
   renderTab();
 }
 
@@ -2110,10 +2104,9 @@ function saveMoveResultSplit(fromResultId, splitId) {
     S.results = S.results.filter((r) => String(r.id) !== String(fromResultId));
   }
   recomputeResultSplits(toResult);
-  saveState();
+  saveState('Parcial movido.');
   closeModal();
   renderTab();
-  toast('Parcial movido.');
 }
 
 function renderResultados() {
@@ -2169,10 +2162,9 @@ function deleteResult(id) {
 
 function confirmDeleteResult(id) {
   S.results = S.results.filter((r) => String(r.id) !== String(id));
-  saveState();
+  saveState('Resultado apagado.');
   closeModal();
   renderTab();
-  toast('Resultado apagado.');
 }
 
 function exportCSV() {
@@ -2252,4 +2244,10 @@ window.addEventListener('online', () => toast('Ligação restaurada.'));
 window.addEventListener('offline', () => toast('Modo offline ativado.'));
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && S.activeSession?.running) requestWakeLock();
+});
+
+window.addEventListener('beforeunload', (event) => {
+  if (!hasUnsavedChanges) return;
+  event.preventDefault();
+  event.returnValue = '';
 });
